@@ -2,7 +2,7 @@ const asyncHandler = require('../middleware/asyncHandler');
 const Course = require('../models/Course');
 const createNotification = require('../utils/createNotification');
 
-// @desc    Get all courses pending review
+// @desc    Get all courses pending reviews
 // @route   GET /api/admin/courses/pending
 // @access  Private/Admin
 const getPendingCourses = asyncHandler(async (req, res) => {
