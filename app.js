@@ -10,9 +10,8 @@ const app = express();
 // Security & core middleware
 app.use(helmet());
 app.use(cors({ origin: process.env.CLIENT_URL || '*', credentials: true }));
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 if (process.env.NODE_ENV === 'development') {
   app.use(morgan('dev'));
 }
@@ -47,7 +46,8 @@ app.use('/api/payouts', require('./routes/payoutRoutes'));
 app.use('/api/admin', require('./routes/adminRoutes'));
 app.use('/api/notifications', require('./routes/notificationRoutes'));
 app.use('/api/progress', require('./routes/progressRoutes'));
-
+app.use('/api/wishlist', require('./routes/wishlistRoutes'));
+app.use('/api/discussions', require('./routes/discussionRoutes'));
 // Error handling — must be last
 app.use(notFound);
 app.use(errorHandler);
