@@ -2,6 +2,10 @@ const asyncHandler = require('../middleware/asyncHandler');
 const Section = require('../models/Section');
 const Lecture = require('../models/Lecture');
 const Course = require('../models/Course');
+const Progress = require('../models/Progress');
+const Quiz = require('../models/Quiz');
+const Question = require('../models/Question');
+const { refreshCourseStats } = require('../utils/courseStats');
 
 // Helper — confirms the logged-in user owns the parent course (or is admin)
 const assertCourseOwnership = async (courseId, user) => {
@@ -86,8 +90,20 @@ const deleteSection = asyncHandler(async (req, res) => {
 
   await assertCourseOwnership(section.course, req.user);
 
-  await Lecture.deleteMany({ section: section._id });
+  // Remove everything hanging off this section so nothing is orphaned
+  const lectureIds = await Lecture.find({ section: section._id }).distinct('_id');
+  const quizIds = await Quiz.find({ section: section._id }).distinct('_id');
+  await Promise.all([
+    Lecture.deleteMany({ section: section._id }),
+    Progress.deleteMany({ lecture: { $in: lectureIds } }),
+    Question.deleteMany({ quiz: { $in: quizIds } }),
+    Quiz.deleteMany({ section: section._id }),
+  ]);
   await section.deleteOne();
+
+  // Previously totalDuration was never reduced here, and students' progress kept
+  // counting the deleted lectures. Recompute both from what's left.
+  await refreshCourseStats(section.course);
 
   res.status(200).json({ success: true, message: 'Section and its lectures deleted' });
 });

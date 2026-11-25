@@ -1,5 +1,6 @@
 const asyncHandler = require('../middleware/asyncHandler');
 const Coupon = require('../models/Coupon');
+const { getCouponError } = require('../utils/couponRules');
 
 // @desc    Get all coupons
 // @route   GET /api/coupons
@@ -76,34 +77,11 @@ const validateCoupon = asyncHandler(async (req, res) => {
     throw new Error('code and courseIds are required');
   }
 
-  const coupon = await Coupon.findOne({ code: code.toUpperCase() });
-  if (!coupon) {
-    res.status(404);
-    throw new Error('Invalid coupon code');
-  }
-  if (!coupon.isActive) {
-    res.status(400);
-    throw new Error('This coupon is no longer active');
-  }
-  if (coupon.expiresAt < new Date()) {
-    res.status(400);
-    throw new Error('This coupon has expired');
-  }
-  if (coupon.maxUses && coupon.usedCount >= coupon.maxUses) {
-    res.status(400);
-    throw new Error('This coupon has reached its usage limit');
-  }
-
-  // If applicableCourses is empty, it applies to everything; otherwise every
-  // course in the cart must be in the allowed list.
-  if (coupon.applicableCourses.length > 0) {
-    const allApplicable = courseIds.every((id) =>
-      coupon.applicableCourses.some((c) => c.toString() === id)
-    );
-    if (!allApplicable) {
-      res.status(400);
-      throw new Error('This coupon does not apply to all courses in your cart');
-    }
+  const coupon = await Coupon.findOne({ code: String(code).toUpperCase() });
+  const couponError = getCouponError(coupon, courseIds);
+  if (couponError) {
+    res.status(couponError.status);
+    throw new Error(couponError.message);
   }
 
   res.status(200).json({ success: true, data: { discountPercent: coupon.discountPercent, code: coupon.code } });

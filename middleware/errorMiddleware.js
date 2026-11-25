@@ -7,7 +7,10 @@ const notFound = (req, res, next) => {
 
 // Centralized error handler — every controller error lands here
 const errorHandler = (err, req, res, next) => {
-  let statusCode = res.statusCode === 200 ? 500 : res.statusCode;
+  // Prefer a status attached to the error itself (e.g. helpers like
+  // assertCourseOwnership that throw without access to `res`), then whatever
+  // the controller set via res.status(), and finally fall back to 500.
+  let statusCode = err.statusCode || (res.statusCode === 200 ? 500 : res.statusCode);
   let message = err.message;
 
   // Mongoose bad ObjectId

@@ -5,6 +5,7 @@ require('dotenv').config();
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 const connectDB = require('./config/db');
+const generateSeedThumbnail = require('./utils/generateSeedThumbnail');
 
 const User = require('./models/User');
 const Category = require('./models/Category');
@@ -15,6 +16,8 @@ const Enrollment = require('./models/Enrollment');
 const Order = require('./models/Order');
 const Review = require('./models/Review');
 const Coupon = require('./models/Coupon');
+const Discussion = require('./models/Discussion');
+const Payout = require('./models/Payout');
 
 const slugify = (text) =>
   text.toString().toLowerCase().trim().replace(/[^\w\s-]/g, '').replace(/[\s_-]+/g, '-');
@@ -30,6 +33,8 @@ const destroy = async () => {
     Order.deleteMany(),
     Review.deleteMany(),
     Coupon.deleteMany(),
+    Discussion.deleteMany(),
+    Payout.deleteMany(),
   ]);
   console.log('All collections cleared.');
 };
@@ -116,12 +121,16 @@ const seed = async () => {
     },
   ];
 
+  const categoryMap = {};
+  categories.forEach((cat) => { categoryMap[cat._id.toString()] = cat.name; });
+
   const courses = [];
   for (const data of courseData) {
+    const categoryName = categoryMap[data.category.toString()];
     const course = await Course.create({
       ...data,
       slug: slugify(data.title),
-      thumbnail: `https://picsum.photos/seed/${slugify(data.title)}/800/450`,
+      thumbnail: generateSeedThumbnail(data.title, categoryName),
       language: 'English',
       status: 'published',
     });
@@ -131,6 +140,8 @@ const seed = async () => {
 
   // ---------- Sections + Lectures ----------
   const sampleVideo = 'https://www.w3schools.com/html/mov_bbb.mp4';
+  // Track the first lecture of each course so Q&A has something real to attach to
+  const firstLectureByCourse = {};
 
   for (const course of courses) {
     const sectionTitles = ['Getting Started', 'Core Concepts', 'Building a Real Project'];
@@ -143,23 +154,26 @@ const seed = async () => {
       const lectureCount = 3;
       for (let i = 1; i <= lectureCount; i++) {
         const duration = 300 + i * 60;
-        await Lecture.create({
+        const lecture = await Lecture.create({
           section: section._id,
           course: course._id,
           title: `${title} — Lecture ${i}`,
           videoUrl: sampleVideo,
           duration,
-          isPreview: lectureOrder === 1 && order === 2, // first lecture of first section is free preview
+          isPreview: lectureOrder === 1 && order === 2,
           order: lectureOrder++,
         });
         totalDuration += duration;
+        if (!firstLectureByCourse[course._id.toString()]) {
+          firstLectureByCourse[course._id.toString()] = lecture;
+        }
       }
       await Course.findByIdAndUpdate(course._id, { $inc: { totalDuration } });
     }
   }
   console.log('Created sections and lectures for every course.');
 
-  // ---------- Enrollments + Orders (Emma and Liam buy a few courses) ----------
+  // ---------- Enrollments + Orders ----------
   const enrollPairs = [
     { student: students[0], course: courses[0] },
     { student: students[0], course: courses[2] },
@@ -182,6 +196,20 @@ const seed = async () => {
   }
   console.log(`Created ${enrollPairs.length} enrollments with orders.`);
 
+  // ---------- An extra order using the WELCOME10 coupon, so Orders reflect a real discount ----------
+  const discountedOrder = await Order.create({
+    student: students[3]._id,
+    courses: [{ course: courses[3]._id, priceAtPurchase: courses[3].price }],
+    coupon: null, // set below once the coupon exists, see note after Coupons section
+    totalAmount: Number((courses[3].price * 0.9).toFixed(2)),
+    paymentGateway: 'mock',
+    paymentIntentId: `seed_${Date.now()}_coupon`,
+    paymentStatus: 'success',
+  });
+  await Enrollment.create({ student: students[3]._id, course: courses[3]._id, order: discountedOrder._id, progressPercent: 15 });
+  await Course.findByIdAndUpdate(courses[3]._id, { $inc: { totalStudents: 1 } });
+  console.log('Created a discounted order + enrollment (Manan Ali, Machine Learning A-Z).');
+
   // ---------- Reviews ----------
   await Review.create({ course: courses[0]._id, student: students[0]._id, rating: 5, comment: 'Excellent course, very clear explanations!' });
   await Review.create({ course: courses[0]._id, student: students[1]._id, rating: 4, comment: 'Good content, a bit fast-paced in places.' });
@@ -189,11 +217,69 @@ const seed = async () => {
   console.log('Created sample reviews.');
 
   // ---------- Coupons ----------
-  await Coupon.create({
+  const welcomeCoupon = await Coupon.create({
     code: 'WELCOME10', discountPercent: 10,
-    expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days from now
+    expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+    usedCount: 1, // reflects the discounted order above
   });
-  console.log('Created a sample coupon (WELCOME10).');
+  await Order.findByIdAndUpdate(discountedOrder._id, { coupon: welcomeCoupon._id });
+  console.log('Created a sample coupon (WELCOME10), linked to the discounted order.');
+
+  // ---------- Wishlist ----------
+  // Sharjeel is enrolled in React + Python already; wishlist a couple more he hasn't bought yet.
+  await User.findByIdAndUpdate(students[0]._id, {
+    $addToSet: { wishlist: { $each: [courses[1]._id, courses[4]._id] } },
+  });
+  // Kashif wishlists the ML course.
+  await User.findByIdAndUpdate(students[1]._id, {
+    $addToSet: { wishlist: [courses[3]._id] },
+  });
+  console.log('Added sample wishlist entries for 2 students.');
+
+  // ---------- Q&A / Discussions ----------
+  const reactLecture = firstLectureByCourse[courses[0]._id.toString()];
+  const pythonLecture = firstLectureByCourse[courses[2]._id.toString()];
+
+  await Discussion.create({
+    course: courses[0]._id,
+    lecture: reactLecture._id,
+    student: students[0]._id,
+    question: 'Do I need to know class components before starting this, or is it all hooks-based?',
+    answer: "It's all hooks-based — no class component knowledge required. We cover everything from scratch.",
+    answeredAt: new Date(),
+  });
+  await Discussion.create({
+    course: courses[0]._id,
+    lecture: reactLecture._id,
+    student: students[1]._id,
+    question: 'Is the final project deployed anywhere I can see a live demo first?',
+    // left unanswered on purpose, so the Teacher "Unanswered" tab has something to show
+  });
+  await Discussion.create({
+    course: courses[2]._id,
+    lecture: pythonLecture._id,
+    student: students[0]._id,
+    question: 'Which Python version are the code examples using?',
+    answer: 'Python 3.11+. Anything 3.9 or newer will work fine for every example in this course.',
+    answeredAt: new Date(),
+  });
+  console.log('Created 3 Q&A discussions (2 answered, 1 unanswered).');
+
+  // ---------- Payouts ----------
+  // Give teachers some earnings first (checkout normally does this via orderController,
+  // but we're inserting orders directly above, so we credit it here to match).
+  await User.findByIdAndUpdate(teachers[0]._id, { $inc: { earnings: 49.99 + 49.99 } }); // 2 React enrollments
+  await User.findByIdAndUpdate(teachers[1]._id, { $inc: { earnings: 44.99 + 53.99 } }); // Python + discounted ML
+  await User.findByIdAndUpdate(teachers[2]._id, { $inc: { earnings: 0 } }); // free course, no earnings
+
+  await Payout.create({ teacher: teachers[0]._id, amount: 40, status: 'paid', requestedAt: new Date(Date.now() - 6 * 24 * 60 * 60 * 1000), processedAt: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000) });
+  await Payout.create({ teacher: teachers[1]._id, amount: 30, status: 'requested', requestedAt: new Date() });
+  await Payout.create({ teacher: teachers[0]._id, amount: 15, status: 'rejected', requestedAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000), processedAt: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000) });
+  // Reflect the "paid" and "rejected" payouts in each teacher's remaining balance,
+  // same reserve/refund logic the real payoutController applies.
+  await User.findByIdAndUpdate(teachers[0]._id, { $inc: { earnings: -40 } }); // paid: deducted, not refunded
+  // the rejected 15 was requested then refunded, so net effect on balance is zero — no further change needed
+  console.log('Created 3 payout requests (paid, requested, rejected) with balances adjusted to match.');
 
   console.log('\n✅ Seed complete.');
   console.log('\nLogin with any of these (all use password: password123):');

@@ -4,6 +4,7 @@ const Course = require('../models/Course');
 const Enrollment = require('../models/Enrollment');
 const Coupon = require('../models/Coupon');
 const User = require('../models/User');
+const { getCouponError } = require('../utils/couponRules');
 
 // @desc    Checkout — creates an order and enrolls the student
 //          MOCK PAYMENT: marks payment as "success" immediately, no real gateway call.
@@ -44,14 +45,13 @@ const checkout = asyncHandler(async (req, res) => {
   // ---- Coupon handling (re-validates server-side, never trusts a client-computed discount) ----
   let coupon = null;
   if (couponCode) {
-    coupon = await Coupon.findOne({ code: couponCode.toUpperCase() });
-    if (!coupon || !coupon.isActive || coupon.expiresAt < new Date()) {
-      res.status(400);
-      throw new Error('Invalid or expired coupon code');
-    }
-    if (coupon.maxUses && coupon.usedCount >= coupon.maxUses) {
-      res.status(400);
-      throw new Error('This coupon has reached its usage limit');
+    coupon = await Coupon.findOne({ code: String(couponCode).toUpperCase() });
+    // Same rules as /api/coupons/validate — including applicableCourses, which
+    // this endpoint previously skipped (allowing the coupon on any course via direct API call).
+    const couponError = getCouponError(coupon, courseIds);
+    if (couponError) {
+      res.status(couponError.status === 404 ? 400 : couponError.status);
+      throw new Error(couponError.message);
     }
     totalAmount = totalAmount * (1 - coupon.discountPercent / 100);
     totalAmount = Math.round(totalAmount * 100) / 100;

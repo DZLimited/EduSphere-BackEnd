@@ -6,7 +6,7 @@ const lectureSchema = new mongoose.Schema(
     course: { type: mongoose.Schema.Types.ObjectId, ref: 'Course', required: true },
     title: { type: String, required: true },
     videoUrl: { type: String, required: true },
-    duration: { type: Number, required: true },
+    duration: { type: Number, required: true, min: [0, 'Duration cannot be negative'] }, // seconds
     resources: [{ name: String, fileUrl: String }],
     isPreview: { type: Boolean, default: false },
     order: { type: Number, required: true },

@@ -2,6 +2,7 @@ const asyncHandler = require('../middleware/asyncHandler');
 const Progress = require('../models/Progress');
 const Enrollment = require('../models/Enrollment');
 const Lecture = require('../models/Lecture');
+const { recalculateEnrollmentProgress } = require('../utils/courseStats');
 
 // @desc    Get progress for every lecture in a course (for the course player sidebar)
 // @route   GET /api/progress/course/:courseId
@@ -56,21 +57,23 @@ const updateLectureProgress = asyncHandler(async (req, res) => {
     progress = new Progress({ enrollment: enrollment._id, lecture: lecture._id });
   }
 
-  if (lastWatchedSeconds !== undefined) progress.lastWatchedSeconds = lastWatchedSeconds;
+  if (lastWatchedSeconds !== undefined) {
+    const seconds = Number(lastWatchedSeconds);
+    if (!Number.isFinite(seconds) || seconds < 0) {
+      res.status(400);
+      throw new Error('lastWatchedSeconds must be a non-negative number');
+    }
+    progress.lastWatchedSeconds = seconds;
+  }
   if (isCompleted !== undefined) {
-    progress.isCompleted = isCompleted;
-    if (isCompleted) progress.completedAt = new Date();
+    progress.isCompleted = Boolean(isCompleted);
+    progress.completedAt = progress.isCompleted ? new Date() : undefined;
   }
   await progress.save();
 
-  // Recalculate the enrollment's cached progressPercent (Phase 2 design decision — denormalized for fast reads)
-  const totalLectures = await Lecture.countDocuments({ course: lecture.course });
-  const completedCount = await Progress.countDocuments({ enrollment: enrollment._id, isCompleted: true });
-  const progressPercent = totalLectures > 0 ? Math.round((completedCount / totalLectures) * 100) : 0;
-
-  enrollment.progressPercent = progressPercent;
-  enrollment.isCompleted = progressPercent === 100;
-  await enrollment.save();
+  // Recalculate the enrollment's cached progressPercent. Only lectures that still exist
+  // are counted, so the percentage can no longer exceed 100 after lectures are deleted.
+  await recalculateEnrollmentProgress(enrollment);
 
   res.status(200).json({ success: true, data: { progress, enrollment } });
 });

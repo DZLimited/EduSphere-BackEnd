@@ -15,25 +15,30 @@ const protect = asyncHandler(async (req, res, next) => {
     throw new Error('Not authorized, no token provided');
   }
 
+  // Only the JWT verification itself is wrapped — previously the try/catch also
+  // swallowed the "user not found" / "account blocked" errors below and replaced
+  // them with a generic 401, so blocked users never saw why they were rejected.
+  let decoded;
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    req.user = await User.findById(decoded.id).select('-password');
-
-    if (!req.user) {
-      res.status(401);
-      throw new Error('User not found');
-    }
-
-    if (req.user.isBlocked) {
-      res.status(403);
-      throw new Error('Your account has been blocked. Contact support.');
-    }
-
-    next();
+    decoded = jwt.verify(token, process.env.JWT_SECRET);
   } catch (error) {
     res.status(401);
     throw new Error('Not authorized, token failed');
   }
+
+  req.user = await User.findById(decoded.id).select('-password');
+
+  if (!req.user) {
+    res.status(401);
+    throw new Error('User not found');
+  }
+
+  if (req.user.isBlocked) {
+    res.status(403);
+    throw new Error('Your account has been blocked. Contact support.');
+  }
+
+  next();
 });
 
 // Role-based access — usage: authorize('admin', 'teacher')

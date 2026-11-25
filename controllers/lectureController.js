@@ -1,20 +1,32 @@
 const asyncHandler = require('../middleware/asyncHandler');
 const Lecture = require('../models/Lecture');
 const Section = require('../models/Section');
-const { assertCourseOwnership } = require('./sectionController');
 const Course = require('../models/Course');
 const Enrollment = require('../models/Enrollment');
+const Progress = require('../models/Progress');
+const { assertCourseOwnership } = require('./sectionController');
+const { refreshCourseStats, recalculateCourseDuration } = require('../utils/courseStats');
+
+const parseDuration = (value, res) => {
+  const duration = Number(value);
+  if (!Number.isFinite(duration) || duration < 0) {
+    res.status(400);
+    throw new Error('duration must be a non-negative number of seconds');
+  }
+  return duration;
+};
 
 // @desc    Create a lecture under a section
 // @route   POST /api/lectures
 // @access  Private/Teacher (owner)
 const createLecture = asyncHandler(async (req, res) => {
-  const { section: sectionId, title, videoUrl, duration, isPreview, resources } = req.body;
+  const { section: sectionId, title, videoUrl, isPreview, resources } = req.body;
 
-  if (!sectionId || !title || !videoUrl || duration === undefined) {
+  if (!sectionId || !title || !videoUrl || req.body.duration === undefined) {
     res.status(400);
     throw new Error('section, title, videoUrl and duration are required');
   }
+  const duration = parseDuration(req.body.duration, res);
 
   const section = await Section.findById(sectionId);
   if (!section) {
@@ -35,7 +47,10 @@ const createLecture = asyncHandler(async (req, res) => {
     resources: resources || [],
     order: count + 1,
   });
- await Course.findByIdAndUpdate(section.course, { $inc: { totalDuration: duration } });
+
+  // New lecture = longer course AND a bigger denominator for every enrolled student
+  await refreshCourseStats(section.course);
+
   res.status(201).json({ success: true, data: lecture });
 });
 
@@ -62,7 +77,7 @@ const getLectureById = asyncHandler(async (req, res) => {
     return res.status(200).json({ success: true, data: lecture });
   }
 
-  const isOwner = await require('../models/Course').exists({ _id: lecture.course, teacher: req.user._id });
+  const isOwner = await Course.exists({ _id: lecture.course, teacher: req.user._id });
   if (isOwner) {
     return res.status(200).json({ success: true, data: lecture });
   }
@@ -88,12 +103,19 @@ const updateLecture = asyncHandler(async (req, res) => {
 
   await assertCourseOwnership(lecture.course, req.user);
 
+  if (req.body.duration !== undefined) req.body.duration = parseDuration(req.body.duration, res);
+
   const allowedFields = ['title', 'videoUrl', 'duration', 'isPreview', 'resources', 'order'];
   allowedFields.forEach((field) => {
     if (req.body[field] !== undefined) lecture[field] = req.body[field];
   });
 
+  const durationChanged = lecture.isModified('duration');
   await lecture.save();
+
+  // Previously a duration edit never reached Course.totalDuration
+  if (durationChanged) await recalculateCourseDuration(lecture.course);
+
   res.status(200).json({ success: true, data: lecture });
 });
 
@@ -108,8 +130,10 @@ const deleteLecture = asyncHandler(async (req, res) => {
   }
 
   await assertCourseOwnership(lecture.course, req.user);
-  await Course.findByIdAndUpdate(lecture.course, { $inc: { totalDuration: -lecture.duration } });
+
+  await Progress.deleteMany({ lecture: lecture._id });
   await lecture.deleteOne();
+  await refreshCourseStats(lecture.course);
 
   res.status(200).json({ success: true, message: 'Lecture deleted' });
 });
