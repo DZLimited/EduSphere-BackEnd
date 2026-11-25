@@ -1,16 +1,25 @@
-# Create .gitignore
-echo "node_modules/
+# Dependencies
+node_modules/
+
+# Environment / secrets
 .env
-.DS_Store
+.env.*
+!.env.example
+
+# Build output
 dist/
 build/
-*.log" > .gitignore
 
-# Add and commit .gitignore
-git add .gitignore
-git commit -m "Add .gitignore"
+# Logs
+*.log
+logs/
 
-# Then add all other files
-git add .
-git commit -m "Add backend source code"
-git push origin main
+# Uploaded files (temp storage before Cloudinary) — keep the folder, not its contents
+uploads/temp/*
+!uploads/temp/.gitkeep
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
